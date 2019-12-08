@@ -1,0 +1,260 @@
+---
+output: html_document
+---
+## Mapping Chicago crime report data by ward, 5/28/19 to 11/28/19
+#### C. Rosemond 12/08/19
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+### Motivation
+This project explores and maps crime report data from the past six months in the City of Chicago. As a Chicago resident, I have a vested interest in better understanding the distribution and patterns of crime across the city. Chicago has a poor reputation with regards to the number of crimes occurring within city limits, but anecdotally, crime is focused in specific geographies, down to the block level. I sought to gain an objective sense of where these areas are located, with a focus on wards given the outsize role that ward aldermen play in city politics.
+
+Practically, I wanted to build mapping skills in R. I have a lot of experience with traditional GIS platforms like ArcGIS and QGIS, but I am new to R and expect that the language could provide additional flexibility to manipulate and analyze geographic data. R offers numerous mapping libraries that could rival traditional platforms.
+
+<br>
+
+### Data
+I created a variety of static maps using crime reports from 5/28/19 to 11/28/19 published on the City of Chicago's Data Portal (https://data.cityofchicago.org/), and I used population data made available on the Chicago Data Guy blog (http://robparal.blogspot.com/). The specific data sets included "Crimes - 1 year prior to present", a CSV file, which I filtered down to six months prior to allow for uploading to GitHub; "Estimated ward populations", a CSV file, created by a Chicago data blogger using U.S. Census data; and a ward boundary shapefile.
+
+Data sources: City of Chicago Data Portal, Chicago Data Guy blog
+
+    City of Chicago. (2019). Crimes - 1 year prior to present [CSV]. Retrieved from https://data.cityofchicago.org/api/views/x2n5-8w5q/rows.csv?accessType=DOWNLOAD
+
+    City of Chicago. (2019). Ward boundaries [Shapefile]. Retrieved from https://data.cityofchicago.org/api/geospatial/sp34-6z76?method=export&format=Shapefile
+
+    Chicago Data Guy. (2019). Estimated ward populations [CSV]. Retrieved from https://docs.google.com/spreadsheets/d/1sxM-JajdrC7R1VZ_sHjUwkTQ0qs2z7a7jFbCblTii3Q/edit#gid=1503084939
+
+Note: All project files are available on GitHub (https://github.com/chrosemo/data607_final_R). I access the crimes and population CSV files directly via URL. Unfortunately, I could not identify a means to read the shapefile, as available on GitHub, directly from url and thus reference the downloaded zip file on my local machine.
+
+<br>
+
+### General Hypothesis and Plan of Analysis
+I hypothesized that reported crimes are not uniformly distributed across the city and that they tend to cluster in certain wards. My experience suggests that crimes are common in Chicago's Loop and River North neighborhoods, prime areas for business, shopping, and nightlife. I expected that the 42nd ward, including the Loop and River North, will be one of the wards with the highest number and/or rate of reported crimes.
+
+My analysis consists of exploratory and mapping components. I calculated descriptive statistics by type of crime and looked at the ten most commonly reported types, which make up over 90 percent of all crimes reported citywide during the 5/28/19 to 11/28/19 period. I then determined the top and bottom ten wards by the proportion of crime, from the ten most common types and citywide, occurring within the ward, and I calculated ward-specific ratios of the number of crimes to estimated 2016 population.
+
+For mapping, I created choropleths, plotted crime by latitude and longitude, and experimented with various basemaps and settings. Ultimately, I prefer working on ArcGIS and the like, but R allows for quick mapping that easily integrates with non-geographic analyses. It also offers dynamic mapping functionality, which I did not delve into here, that has interesting web applications.
+
+<br>
+
+### Libraries
+I used tidyverse libraries for reading in data and a few different R mapping/visualization libraries for mapping, including tmap and ggmap as well as ggplot2.
+
+```{r libraries, eval=TRUE, message=FALSE, warning=FALSE}
+library(readr)
+library(tidyr)
+library(dplyr)
+library(rgdal)
+library(ggplot2)
+library(tmap)
+library(ggmap)
+library(qmap)
+theme_set(theme_bw())
+```
+
+<br>
+
+### Exploratory Analysis
+I begin by reading in the crimes and population data sets, which I will merge for mapping. I pull them directly from my GitHub repository (https://github.com/chrosemo/data607_final_R/tree/master). 
+
+```{r csv, eval=TRUE, message=FALSE, warning=FALSE}
+crimes <- read_csv("https://raw.githubusercontent.com/chrosemo/data607_final_R/master/Crimes_-_6mosprior.csv", col_names = TRUE)
+population <- read_csv("https://raw.githubusercontent.com/chrosemo/data607_final_R/master/Estimated%20Ward%20Populations%20-%20Estimated%20Ward%20Populations.csv", skip = 1, col_names = TRUE) %>% slice(1:50) %>% rename(WARD = Ward)
+population$WARD <- as.numeric(population$WARD)
+```
+
+<br>
+
+Approximately 135,344 crimes were reported from 5/28/19 to 11/28/19 and captured in the Chicago Police Department's Citizen Law Enforcement Analysis and Reporting system, or CLEAR. The data set includes 31 different high-level categories of crime, ranging from arson to narcotics to sex offense.
+
+```{r exploratory1, eval=TRUE, message=FALSE, warning=FALSE}
+nrow(crimes)
+table(crimes$`PRIMARY DESCRIPTION`)
+```
+
+<br>
+
+The population data set includes ward-specific total and racial/ethnic population counts from the 2010 U.S. Census as well as population estimates using 2012-2016 5-year Census data. An estimated 2,711,665 people resided in the City of Chicago as of 2016. Please note that these data are the freshest population estimates I could find at the ward level, and they do not align chronologically with the crime data.
+
+```{r exploratory2, eval=TRUE, message=FALSE, warning=FALSE}
+sum(population$Total2016)
+```
+
+<br>
+
+The ten most commonly reported crimes were, from most to least, theft, battery, criminal damage, assault, deceptive practice, other offense, narcotics, burglary, motor vehicle theft, and robbery. These crimes made up approximately 90.5% of all reports during the 6-month time period. Theft and battery were the most commonly reported crimes and represented approximately 25% and 19%, respectively, of all crimes citywide.
+
+```{r exploratory3, eval=TRUE, message=FALSE, warning=FALSE}
+crimes_bar <- crimes %>% count(`PRIMARY DESCRIPTION`) %>% mutate(Percentage = round(n/nrow(crimes)*100,2)) %>% filter(rank(desc(Percentage)) <= 10)
+ggplot(crimes_bar, aes(x = reorder(`PRIMARY DESCRIPTION`,-Percentage), y = Percentage)) +
+  geom_bar(stat = "identity") +
+  labs(title= "10 most common crimes by % of crimes citywide, Chicago 5/28-11/28/19", x="Type of crime", y="Proportion of crimes reported citywide") +
+  theme(axis.text.x=element_text(angle=45, hjust=1)) -> top10_crimes
+ggsave("top10_crimes.png", plot = top10_crimes)
+```
+
+```{r exploratory4, eval=TRUE, message=FALSE}
+top10 <- c("THEFT","BATTERY","CRIMINAL DAMAGE","ASSAULT","DECEPTIVE PRACTICE","OTHER OFFENSE","NARCOTICS","BURGLARY","MOTOR VEHICLE THEFT","ROBBERY")
+sum(crimes$`PRIMARY DESCRIPTION` %in% top10)/nrow(crimes)
+top10_crimes
+```
+
+<br>
+
+The top ten wards by percentage of reported crime citywide were, from most to least, the 42nd, 28th, 27th, 24th, 6th, 17th, 21st, 20th, 8th, and 9th. The 42nd ward's place aligns with my hypothesis and makes sense given that it, as essentially the city center, contains a clustering of people during business and off hours, both during the work week and on weekends. The other wards are focused in the west and south sides of the city, which are generally clusters of relative poverty.
+
+The bottom ten wards were, from most to least, the 50th, 33rd, 48th, 23rd, 45th, 47th, 39th, 13th, 19th, and 38th. These wards are clustered on the north/northwest and southwest sides, which are largely made up of working- to upper-middle class family neighborhoods.
+
+```{r exploratory5, eval=TRUE, message=FALSE, warning=FALSE}
+crimes10 <- crimes %>% filter(`PRIMARY DESCRIPTION` %in% top10)
+crimes10 %>% count(`WARD`) %>% mutate(Percentage = round(n/nrow(crimes10)*100,2)) %>% filter(rank(desc(Percentage)) <= 10) %>% ggplot(aes(x = reorder(`WARD`,-Percentage), y = Percentage)) +
+  geom_bar(stat = "identity") +
+  labs(title="Top 10 wards by % of reported crime citywide, Chicago 5/28-11/28/19", x="Ward", y="Percentage of crimes citywide") +
+  ylim(0,7) -> top10_perc
+ggsave("top10_perc.png", plot = top10_perc)
+crimes10 %>% count(`WARD`) %>% mutate(Percentage = round(n/nrow(crimes10)*100,2)) %>% filter(!is.na(`WARD`)) %>% filter(rank(Percentage) <= 10) %>% ggplot(aes(x = reorder(`WARD`, -Percentage), y = Percentage)) +
+  geom_bar(stat = "identity") +
+  labs(title="Bottom 10 wards by % of reported crime citywide, Chicago 5/28-11/28/19", x="Ward", y="Percentage of crimes citywide") +
+  ylim(0,7) -> bottom10_perc
+ggsave("bottom10_perc.png", plot = bottom10_perc)
+top10_perc
+bottom10_perc
+```
+
+<br>
+
+Considering rough crime rate, or the number of crimes reported per 1,000 residents, the top ten wards were again the 42nd followed by the 27th, 28th, 24th, 6th, 17th, 20th, 21st, 8th, and 16th. These wards showed rough rates between approximately 120 and 80 crimes reported per 1,000 ward residents and were largely the same as those with the top ten proportions, though the 42nd ward is no longer as relatively high. Likewise, the bottom ten wards were much the same, all with rough rates around 20 reported crimes per 1,000 residents.
+
+```{r exploratory6, eval=TRUE, message=FALSE, warning=FALSE}
+ward_rates <- crimes10 %>% count(WARD) %>% mutate(Percentage = round(n/nrow(crimes10)*100,2)) %>% filter(!is.na(WARD)) %>% inner_join(population, by = "WARD") %>% mutate(Rate = (n/(Total2016/1000))) %>% rename(ward = WARD)
+sum(ward_rates$n)/(sum(ward_rates$Total2016)/1000) #Rough reported crime rate (Top 10 most common crimes) per 1,000 people
+ward_rates %>% filter(rank(desc(Rate)) <= 10) %>% ggplot(aes(x = reorder(ward, -Rate), y = Rate)) +
+  geom_bar(stat = "identity") +
+  labs(title="Top 10 wards by rough crime rate, Chicago 5/28-11/28/19", x="Ward", y="Crime rate per 1,000 residents") +
+  ylim(0,130) -> top10_rate
+ggsave("top10_rate.png", plot = top10_rate)
+ward_rates %>% filter(rank(Rate) <= 10) %>% ggplot(aes(x = reorder(ward, -Rate), y = Rate)) +
+  geom_bar(stat = "identity") +
+  labs(title="Bottom 10 wards by rough crime rate, Chicago 5/28-11/28/19", x="Ward", y="Crime rate per 1,000 residents") +
+  ylim(0,130) -> bottom10_rate
+ggsave("bottom10_rate.png", plot = bottom10_rate)
+top10_rate
+bottom10_rate
+```
+
+<br>
+
+### Mapping Analysis
+I started with choropleth maps, which are maps with areas, or polygons, shaded based upon a numeric variable. Here, I created choropleths showing wards by percentage of crime citywide and rough crime rate per 1,000 residents. Each map expands geographically visualizes the bar charts above and uses Jenks natural breaks for classification.
+
+First, I downloaded and unzipped a zip folder containing a Chicago ward boundary shapefile. I then merged a data frame containing the ward-aggregated crime and population data with the shape file by ward number.
+
+```{r unzip, eval=TRUE, results="hide"}
+usethis::use_zip("https://github.com/chrosemo/data607_final_R/blob/master/ward.zip?raw=true", getwd(), cleanup = 1)
+wards <- readOGR(dsn = ".\\ward", "ward")
+```
+
+```{r merge, eval=TRUE, message=FALSE, warning=FALSE}
+wards@data$ward <- as.character(wards@data$ward)
+ward_rates$ward <- as.character(ward_rates$ward)
+wardsmap <- sp::merge(wards, ward_rates, by.x = "ward", by.y = "ward", all.x = TRUE)
+```
+
+<br>
+
+For percentage of crimes reported citywide, the wards with the highest percentages extend westward from the Loop/River North (the 42nd Ward). There is also an extension into several wards on the south side. The wards with the lowest percentages are clustered on the north/northwest and southwest sides.
+
+```{r choropleth1, eval=TRUE, message=FALSE, warning=FALSE}
+choro1 <- tm_shape(wardsmap) +
+  tm_polygons(col = "Percentage", style = "jenks") +
+  tm_borders() +
+  tm_layout(main.title = "Chicago wards 5/28-11/28/19",
+            title = "% of crimes citywide",
+            title.size = 1,
+            legend.outside = TRUE,
+            legend.title.size = 0.1,
+            legend.title.color = "white",
+            legend.text.size = 1)
+choro1
+```
+
+```{r choro1save, eval=TRUE, results="hide"}
+png("choropleth1.png")
+dev.off()
+```
+
+<br>
+
+For rough reported crime rate, the choropleth is similar, though Jenks results in additional wards being classified in the highest category (100.5 to 129.5). Likewise, there is a slight shift upward into the second highest category (rates between 72.5 to 100.5) among the south side wards.
+
+```{r choropleth2, eval=TRUE, message=FALSE, warning=FALSE}
+choro2 <- tm_shape(wardsmap) +
+  tm_polygons(col = "Rate", style = "jenks") +
+  tm_borders() +
+  tm_layout(main.title = "Chicago wards 5/28-11/28/19",
+            title = "Crimes/1,000 residents",
+            title.size = 1,
+            legend.outside = TRUE,
+            legend.title.size = 0.1,
+            legend.title.color = "white",
+            legend.text.size = 1)
+choro2
+```
+
+```{r choro2save, eval=TRUE, results="hide"}
+png("choropleth2.png")
+dev.off()
+```
+
+<br>
+
+Next, I mapped individual crimes based upon the latitude and longitude of report. The ggplot2 library enables the simple plotting of such coordinates, the results of which you'll see below for the top ten most commonly reported types of crime. Given the use of coordinates without a map projection, the map appears smushed North-to-South and stretched East-to-West. In practice, the map provides a visual outline of the Chicago city limits and suggests that type of crime is generally distributed evenly across the city and thus its wards.
+
+```{r ggplot, eval=TRUE, message=FALSE, warning=FALSE}
+latlon <- ggplot() +
+  geom_point(data = subset(crimes10, crimes10$`X COORDINATE`!= 0), aes(x = LONGITUDE, y = LATITUDE, color = `PRIMARY DESCRIPTION`)) +
+  ggtitle("Locations of reported crimes, Chicago 5/28-11/28/19") +
+  labs(color = "10 most common crimes") +
+  xlab("Longitude") +
+  ylab("Latitude")
+ggsave("latlon.png", plot = latlon)
+latlon
+```
+
+<br>
+
+Focusing on the 42nd ward, I mapped thefts--the most commonly reported type of crime--using a basemap from Google Maps. Each reported theft is represented by a point, and the slight transparency of the points provides a sense of the clustering of reports. Chicago's N-S-E-W street grid is clear, with Michigan Avenue and State Street--two prominent N-S streets for business and retail--appearing to have the most reported thefts.
+
+```{r key, echo=FALSE, results="hide"}
+#register_google(key = '') #since deleted
+#has_google_key()
+```
+
+```{r ggmap, eval=TRUE, message=FALSE, warning=FALSE}
+ward42theft <- ggmap(get_map(center = c(lon = -87.625, lat = 41.885), zoom = 14, color = "bw")) +
+  geom_point(data = subset(crimes10, crimes10$`PRIMARY DESCRIPTION` == "THEFT"), aes(x = LONGITUDE, y = LATITUDE, color = `PRIMARY DESCRIPTION`), alpha = 0.25) +
+  ggtitle("Reported thefts in the 42nd Ward, 5/28-11/28/19") +
+  xlab("Longitude") +
+  ylab("Latitude") +
+  theme(legend.position = "none")
+ggsave("ward42theft.png", plot = ward42theft)
+ward42theft
+```
+
+<br>
+
+### Caveats and Concerns
+This analysis carries many caveats and concerns. First, there are numerous variables that influence crime as well as when it is reported. In the United States, crime (and targeted policing) typically occurs in impoverished areas that are disproportionately home to people of color. Such is the case in Chicago, where the city is historically segregated by race/ethnicity, and the west and south sides--the residential wards with the highest rough crime rates--are the relative centers of the Black population. I did not have the data or time here to dig into the relationship between geography, poverty, and crime, and instead focused on simply mapping reported crimes.
+
+Second, the lack of fresher ward population estimates limits the relative accuracy of the calculated crime rates. As such, those rates are best interpreted as rough estimates of crime. Ideally, I would have had access to ward-specific population counts for 2018 or estimates for 2019.
+
+Third, the Chicago Police Department publishes the data from its CLEAR system, wherein crime reports are often updated after the fact with more information regarding location or type of crime. I used these data as of early December 2019, so they are only accurate as of that time. In addition, the data are sourced from citizen reports and collected/maintained by police officers and thus subject to the possible biases of those sources and stewards.
+
+<br>
+
+### Conclusion and Further Plans
+The analysis confirmed my hypothesis that the 42nd ward would represent a cluster of reported crimes. In fact, the ward contained the most reported crimes across all city wards over the period from 5/28/19 to 11/28/19. Further, crimes clustered in wards in the west and south sides of the city compared to relatively few reports on the northwest and southwest sides.
+
+I intend to experiment in the future with R's more dynamic mapping libraries, including Leaflet. Some of my professional colleagues rely upon Leaflet for web-based mapping, and I am intrigued by its potential for my own professional work.
